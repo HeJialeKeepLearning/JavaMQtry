@@ -1,6 +1,7 @@
 package pku;
 
 import java.io.*;
+import java.nio.MappedByteBuffer;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -12,8 +13,13 @@ import java.util.Set;
 public class DemoMessageStore {
 	static final DemoMessageStore store = new DemoMessageStore();
 
+	//输入流
+	HashMap<String, DataOutputStream> outMap = new HashMap<>();
 	//给每个consumer对应一个流
-	HashMap<String, BufferedInputStream> inMap = new HashMap<String, BufferedInputStream>();
+	HashMap<String, MappedByteBuffer> inMap  = new HashMap<>();
+
+	DataOutputStream dataOut;
+	MappedByteBuffer dataIn;
 
 
 //	File file=new File("/Users/hejiale/Documents/codes/JAVA/JavaMQ/data");//local test
@@ -21,11 +27,6 @@ public class DemoMessageStore {
 
 	String pathName="/Users/hejiale/Documents/codes/JAVA/JavaMQ/data/";
 //	String pathName="data/";
-
-	String splitStr=",";
-
-	BufferedOutputStream bufferedOutputStream;
-	BufferedInputStream bufferedInputStream;
 
 	// 加锁保证线程安全
 	/**
@@ -36,42 +37,45 @@ public class DemoMessageStore {
 			return;
 		}
 
+		String topic=msg.headers().getString("Topic");
+
 		try {
+			if (!outMap.containsKey(topic)){
+				outMap.put(topic,new DataOutputStream(new BufferedOutputStream(
+						new FileOutputStream(pathName+topic,true))));
 
-			String topic=msg.headers().getString("Topic");
-			FileOutputStream fileOutputStream=new FileOutputStream(pathName+topic,true);
-			bufferedOutputStream=new BufferedOutputStream(fileOutputStream);
+			}
+			//获取当前输入流
+			dataOut=outMap.get(topic);
 
-			//写data
-			bufferedOutputStream.write(getBytes(msg.getBody().length));
-			bufferedOutputStream.write(msg.getBody());
-
-			//写头部
-			String totalHeader="";
-			totalHeader=totalHeader
-					+msg.headers().getObj(MessageHeader.MESSAGE_ID).toString()+splitStr
-					+msg.headers().getObj(MessageHeader.TOPIC).toString()+splitStr
-					+msg.headers().getObj(MessageHeader.BORN_TIMESTAMP).toString()+splitStr
-					+msg.headers().getObj(MessageHeader.BORN_HOST).toString()+splitStr
-					+msg.headers().getObj(MessageHeader.STORE_TIMESTAMP).toString()+splitStr
-					+msg.headers().getObj(MessageHeader.STORE_HOST).toString()+splitStr
-					+msg.headers().getObj(MessageHeader.START_TIME).toString()+splitStr
-					+msg.headers().getObj(MessageHeader.STOP_TIME).toString()+splitStr
-					+msg.headers().getObj(MessageHeader.TIMEOUT).toString()+splitStr
-					+msg.headers().getObj(MessageHeader.PRIORITY).toString()+splitStr
-					+msg.headers().getObj(MessageHeader.RELIABILITY).toString()+splitStr
-					+msg.headers().getObj(MessageHeader.SEARCH_KEY).toString()+splitStr
-					+msg.headers().getObj(MessageHeader.SCHEDULE_EXPRESSION).toString()+splitStr
-					+msg.headers().getObj(MessageHeader.SHARDING_KEY).toString()+splitStr
-					+msg.headers().getObj(MessageHeader.SHARDING_PARTITION).toString()+splitStr
-					+msg.headers().getObj(MessageHeader.TRACE_ID).toString()+splitStr
-			;
-			bufferedOutputStream.write(getBytes(totalHeader.length()));
-			bufferedOutputStream.write(totalHeader.getBytes());
-
-			//写到磁盘
-			bufferedOutputStream.flush();
-			bufferedOutputStream.close();
+			//处理头部
+			KeyValue headers = msg.headers();
+			short key = 0;
+			for (int i = 0; i < 15; i++) {
+				key = (short) (key << 1);
+				if (headers.containsKey(MessageHeader.getHeader(14 - i)))
+					key = (short) (key | 1);
+			}
+			out.writeShort(key);
+			for (int i = 0; i < 4; i++) {
+				if ((key >> i & 1) == 1)
+					out.writeInt(headers.getInt(MessageHeader.getHeader(i)));
+			}
+			for (int i = 4; i < 8; i++) {
+				if ((key >> i & 1) == 1)
+					out.writeLong(headers.getLong(MessageHeader.getHeader(i)));
+			}
+			for (int i = 8; i < 10; i++) {
+				if ((key >> i & 1) == 1)
+					out.writeDouble(headers.getDouble(MessageHeader.getHeader(i)));
+			}
+			for (int i = 11; i < 15; i++) {
+				if ((key >> i & 1) == 1) {
+					String strVal = headers.getString(MessageHeader.getHeader(i));
+					out.writeByte(strVal.getBytes().length);
+					out.write(strVal.getBytes());
+				}
+			}
 
 		}catch (Exception e){
 			e.printStackTrace();
